@@ -106,7 +106,7 @@ function clearLines() {
   if (cleared) {
     lines += cleared;
     score += (LINE_SCORES[cleared] || 0) * level;
-    level = Math.floor(lines / 10) + 1;
+    level = Math.max(gameStartLevel, Math.floor(lines / 10) + 1);
     dropInterval = Math.max(100, 1000 - (level - 1) * 90);
     updateHUD();
   }
@@ -230,13 +230,14 @@ function togglePause() {
   if (gameOver) return;
   paused = !paused;
   if (!paused) {
+    hidePauseMenu();
+    startInputGrace();
+    dropAccum = 0;
     lastTime = performance.now();
     loop(lastTime);
   } else {
     cancelAnimationFrame(animId);
-    overlayTitle.textContent = 'PAUSA';
-    overlayScore.textContent = '';
-    overlay.classList.remove('hidden');
+    showPauseMenu();
   }
 }
 
@@ -260,23 +261,102 @@ function init() {
   board = createBoard();
   score = 0;
   lines = 0;
-  level = 1;
+  gameStartLevel = startLevel;
+  level = gameStartLevel;
   paused = false;
   gameOver = false;
-  dropInterval = 1000;
+  dropInterval = Math.max(100, 1000 - (level - 1) * 90);
   dropAccum = 0;
   lastTime = performance.now();
   next = randomPiece();
   spawn();
   updateHUD();
   overlay.classList.add('hidden');
+  hidePauseMenu();
   cancelAnimationFrame(animId);
   animId = requestAnimationFrame(loop);
 }
 
+// ---- Pause menu ----
+const pauseMenu = document.getElementById('pause-menu');
+const resumeBtn = document.getElementById('resume-btn');
+const pauseRestartBtn = document.getElementById('pause-restart-btn');
+const controlsToggleBtn = document.getElementById('controls-toggle-btn');
+const pauseControls = document.getElementById('pause-controls');
+const startLevelSelect = document.getElementById('start-level-select');
+
+const INPUT_GRACE_MS = 150;
+
+let startLevel = Number(startLevelSelect.value) || 1; // chosen in the menu, applied on next init()
+let gameStartLevel = startLevel;                       // start level of the game in progress
+let inputGraceUntil = 0;
+const heldKeys = new Set();  // keys currently physically held down
+let staleKeys = new Set();   // keys held at resume; their auto-repeat is ignored until released
+
+function showPauseMenu() {
+  pauseMenu.classList.remove('hidden');
+  resumeBtn.focus();
+}
+
+function hidePauseMenu() {
+  pauseMenu.classList.add('hidden');
+  // Drop focus so Space/arrows during play don't re-activate menu controls
+  if (pauseMenu.contains(document.activeElement)) document.activeElement.blur();
+}
+
+function startInputGrace() {
+  inputGraceUntil = performance.now() + INPUT_GRACE_MS;
+  staleKeys = new Set(heldKeys);
+}
+
+function isGameInputBlocked(e) {
+  if (performance.now() < inputGraceUntil) return true;
+  return e.repeat && staleKeys.has(e.code);
+}
+
+document.addEventListener('keydown', e => { heldKeys.add(e.code); });
+document.addEventListener('keyup', e => {
+  heldKeys.delete(e.code);
+  staleKeys.delete(e.code);
+});
+window.addEventListener('blur', () => {
+  heldKeys.clear();
+  staleKeys.clear();
+});
+
+resumeBtn.addEventListener('click', () => {
+  resumeBtn.blur();
+  if (paused) togglePause();
+});
+
+pauseRestartBtn.addEventListener('click', () => {
+  pauseRestartBtn.blur();
+  init();
+  startInputGrace();
+});
+
+controlsToggleBtn.addEventListener('click', () => {
+  const open = pauseControls.classList.toggle('hidden') === false;
+  controlsToggleBtn.setAttribute('aria-expanded', String(open));
+  controlsToggleBtn.textContent = open ? 'Ocultar controles' : 'Ver controles';
+});
+
+startLevelSelect.addEventListener('change', () => {
+  startLevel = Number(startLevelSelect.value) || 1;
+});
+
+// The game-over restart button also must not keep focus after a click
+restartBtn.addEventListener('click', () => restartBtn.blur());
+// ---- End pause menu ----
+
 document.addEventListener('keydown', e => {
-  if (e.code === 'KeyP') { togglePause(); return; }
+  if (e.code === 'KeyP' || e.code === 'Escape') {
+    e.preventDefault();
+    if (!e.repeat) togglePause();
+    return;
+  }
   if (paused || gameOver) return;
+  if (isGameInputBlocked(e)) return;
   switch (e.code) {
     case 'ArrowLeft':
       if (!collide(current.shape, current.x - 1, current.y)) current.x--;
